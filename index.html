@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f3d36">
+<title>토템 지도</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* 지도 전체 화면 + 아래쪽 상태 시트. 숲길 표지판 같은 짙은 녹색에 신호용 주황 */
+:root {
+  --ink: #17231f;
+  --paper: #f3f5f2;
+  --sheet: #ffffff;
+  --line: #d9e0db;
+  --muted: #5d6b65;
+  --forest: #1f3d36;
+  --me: #2a6fdb;
+  --friend: #e2701b;
+  --meet: #b3261e;
+  --ok: #2e7d4f;
+  --warn: #b26a00;
+  --font-body: "IBM Plex Sans KR", "Noto Sans KR", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e6ece8; --paper: #0f1714; --sheet: #17211d; --line: #2a3832;
+    --muted: #93a39b; --forest: #9fd3bf; --me: #6ea3ff; --friend: #ff9a4d;
+    --meet: #ff6f61; --ok: #6fcf97; --warn: #f2b14c; color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--paper); color: var(--ink);
+  font: 15px/1.45 var(--font-body);
+  display: flex; flex-direction: column;
+}
+header {
+  display: flex; align-items: center; gap: 10px;
+  padding-block: calc(10px + env(safe-area-inset-top, 0px)) 10px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  background: var(--forest); color: var(--paper);
+}
+@media (prefers-color-scheme: dark) { header { color: #0f1714; } }
+header h1 { font-size: 17px; margin: 0; font-weight: 600; flex: 1; letter-spacing: .02em; }
+.chip {
+  font: 500 12px var(--font-data); padding: 3px 8px; border-radius: 99px;
+  background: rgba(255,255,255,.16); white-space: nowrap;
+}
+#map { flex: 1; min-height: 0; background: var(--line); }
+.sheet {
+  background: var(--sheet); border-top: 1px solid var(--line);
+  padding-block: 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 12px;
+}
+.readout { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.readout div { display: grid; gap: 2px; min-width: 0; }
+.readout .k { font-size: 11px; color: var(--muted); letter-spacing: .04em; }
+.readout .v { font: 500 18px var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.readout .v.big { color: var(--friend); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+button {
+  font: 600 14px var(--font-body); border-radius: 10px; padding: 10px 14px;
+  border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer;
+  flex: 1 1 auto;
+}
+button.primary { background: var(--forest); border-color: var(--forest); color: var(--sheet); }
+button.danger { color: var(--meet); }
+button:focus-visible { outline: 3px solid var(--me); outline-offset: 2px; }
+button[disabled] { opacity: .45; cursor: default; }
+.note { font-size: 13px; color: var(--muted); margin: 0; }
+.note.warn { color: var(--warn); }
+.banner {
+  position: absolute; left: 50%; transform: translateX(-50%); top: 12px; z-index: 500;
+  background: var(--meet); color: #fff; padding: 8px 14px; border-radius: 99px;
+  font-weight: 600; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.25);
+}
+.mapwrap { position: relative; flex: 1; min-height: 0; display: flex; }
+.mapwrap #map { flex: 1; }
+.empty {
+  position: absolute; inset: auto 12px 12px 12px; z-index: 500;
+  background: var(--sheet); border: 1px solid var(--line); border-radius: 14px;
+  padding: 14px 16px; display: grid; gap: 6px;
+}
+.empty strong { font-size: 16px; }
+/* 지도 마커 */
+.pin { width: 22px; height: 22px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+.pin.me { background: var(--me); position: relative; }
+.pin.friend { background: var(--friend); }
+.cone {
+  position: absolute; left: 50%; top: 50%; width: 0; height: 0;
+  border-left: 9px solid transparent; border-right: 9px solid transparent;
+  border-bottom: 20px solid var(--me); opacity: .55;
+  transform-origin: 50% 100%;
+}
+.flag { font: 700 12px var(--font-body); background: var(--meet); color: #fff; padding: 3px 7px; border-radius: 6px; white-space: nowrap; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+.leaflet-container { font-family: var(--font-body); }
+</style>
+</head>
+<body>
+<header>
+  <h1>토템 지도</h1>
+  <span class="chip" id="conn">연결 안 됨</span>
+</header>
+
+<div class="mapwrap">
+  <div id="map"></div>
+  <div class="banner" id="pickBanner" hidden>지도를 눌러 만남 장소를 고르세요</div>
+  <div class="empty" id="empty">
+    <strong>토템을 연결하세요</strong>
+    <p class="note">토템 전원을 켜고 아래 <b>연결</b>을 누른 뒤 목록에서 <b>TOTEM-</b>으로 시작하는 기기를 고르면 나와 상대 위치가 지도에 나타나요.</p>
+    <p class="note warn" id="unsupported" hidden>이 브라우저는 블루투스 연결을 지원하지 않아요. 안드로이드 <b>크롬</b>으로 열어 주세요.</p>
+  </div>
+</div>
+
+<section class="sheet">
+  <div class="readout">
+    <div><span class="k">상대까지</span><span class="v big" id="dist">—</span></div>
+    <div><span class="k">마지막 신호</span><span class="v" id="age">—</span></div>
+    <div><span class="k">신호 세기</span><span class="v" id="rssi">—</span></div>
+    <div><span class="k">내 위성</span><span class="v" id="sats">—</span></div>
+    <div><span class="k">내 배터리</span><span class="v" id="bat">—</span></div>
+    <div><span class="k">상대 배터리</span><span class="v" id="fbat">—</span></div>
+  </div>
+  <div class="row">
+    <button class="primary" id="btnConnect">연결</button>
+    <button id="btnFit" disabled>둘 다 보기</button>
+  </div>
+  <div class="row">
+    <button id="btnPick" disabled>만남 장소 지정</button>
+    <button class="danger" id="btnClear" disabled>만남 장소 지우기</button>
+    <button id="btnTrail">경로 지우기</button>
+  </div>
+  <p class="note" id="msg">만남 장소는 상대 토템에도 전달돼서, 양쪽 화면 원 안에 작은 동그라미로 방향이 표시돼요.</p>
+</section>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const SVC = "6e7a0001-7c3a-4b8e-9f2d-544f54454d31";
+const STATUS = "6e7a0002-7c3a-4b8e-9f2d-544f54454d31";
+const CMD = "6e7a0003-7c3a-4b8e-9f2d-544f54454d31";
+
+const $ = id => document.getElementById(id);
+const map = L.map("map", { zoomControl: false }).setView([36.5, 127.8], 7);
+L.control.zoom({ position: "topright" }).addTo(map);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: "&copy; OpenStreetMap"
+}).addTo(map);
+
+const meIcon = L.divIcon({ className: "", html: '<div class="pin me"><div class="cone" id="cone"></div></div>', iconSize: [22, 22], iconAnchor: [11, 11] });
+const frIcon = L.divIcon({ className: "", html: '<div class="pin friend"></div>', iconSize: [22, 22], iconAnchor: [11, 11] });
+const meetIcon = L.divIcon({ className: "", html: '<div class="flag">만남</div>', iconSize: [40, 20], iconAnchor: [20, 24] });
+
+let meMarker = null, frMarker = null, meetMarker = null;
+const link = L.polyline([], { color: "#e2701b", weight: 2, dashArray: "6 6" }).addTo(map);
+let trail = [];
+try { trail = JSON.parse(localStorage.getItem("trail") || "[]"); } catch (e) {}
+const trailLine = L.polyline(trail, { color: "#e2701b", weight: 3, opacity: .5 }).addTo(map);
+
+let device = null, statusChar = null, cmdChar = null;
+let fittedOnce = false, picking = false, last = null;
+let queue = Promise.resolve();          // GATT 작업은 하나씩
+const gatt = fn => (queue = queue.then(fn, fn));
+
+if (!navigator.bluetooth) {
+  $("unsupported").hidden = false;
+  $("btnConnect").disabled = true;
+}
+
+function setConn(text) { $("conn").textContent = text; }
+function say(text) { $("msg").textContent = text; }
+
+$("btnConnect").onclick = async () => {
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "TOTEM" }], optionalServices: [SVC]
+    });
+    device.addEventListener("gattserverdisconnected", onDisconnect);
+    await connect();
+  } catch (e) {
+    if (e.name !== "NotFoundError") say("연결 실패: " + e.message);
+  }
+};
+
+async function connect() {
+  setConn("연결 중…");
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(SVC);
+  statusChar = await svc.getCharacteristic(STATUS);
+  cmdChar = await svc.getCharacteristic(CMD);
+  setConn(device.name);
+  $("empty").hidden = true;
+  ["btnFit", "btnPick", "btnClear"].forEach(id => $(id).disabled = false);
+  $("btnConnect").textContent = "다른 기기 연결";
+  try { await navigator.wakeLock?.request("screen"); } catch (e) {}
+}
+
+async function onDisconnect() {
+  setConn("다시 연결 중…");
+  for (let i = 0; i < 10 && device && !device.gatt.connected; i++) {
+    try { await connect(); return; } catch (e) { await new Promise(r => setTimeout(r, 2000)); }
+  }
+  setConn("연결 끊김");
+}
+
+function parse(dv) {
+  const f = dv.getUint8(1);
+  return {
+    myFix: !!(f & 1), seen: !!(f & 2), frFix: !!(f & 4), meet: !!(f & 8),
+    lat: dv.getInt32(2, true) / 1e7, lon: dv.getInt32(6, true) / 1e7,
+    heading: dv.getUint16(10, true), sats: dv.getUint8(12), bat: dv.getUint8(13),
+    flat: dv.getInt32(14, true) / 1e7, flon: dv.getInt32(18, true) / 1e7,
+    age: dv.getUint16(22, true), rssi: dv.getInt16(24, true),
+    fsats: dv.getUint8(26), fbat: dv.getUint8(27),
+    wlat: dv.getInt32(28, true) / 1e7, wlon: dv.getInt32(32, true) / 1e7
+  };
+}
+
+function fmtDist(m) { return m < 1000 ? Math.round(m) + "m" : (m / 1000).toFixed(2) + "km"; }
+
+function render(s) {
+  last = s;
+  $("sats").textContent = s.myFix ? s.sats + "개" : "찾는 중";
+  $("bat").textContent = s.bat + "%";
+  $("fbat").textContent = s.seen ? s.fbat + "%" : "—";
+  $("rssi").textContent = s.seen ? s.rssi + "" : "—";
+  $("age").textContent = !s.seen ? "없음" : s.age < 60 ? s.age + "초 전" : Math.floor(s.age / 60) + "분 전";
+
+  if (s.myFix) {
+    const p = [s.lat, s.lon];
+    if (!meMarker) meMarker = L.marker(p, { icon: meIcon, zIndexOffset: 100 }).addTo(map);
+    else meMarker.setLatLng(p);
+    const cone = document.getElementById("cone");
+    if (cone) cone.style.transform = `translate(-50%, -100%) rotate(${s.heading}deg)`;
+  }
+  if (s.seen && s.frFix) {
+    const p = [s.flat, s.flon];
+    if (!frMarker) frMarker = L.marker(p, { icon: frIcon }).addTo(map);
+    else frMarker.setLatLng(p);
+    const prev = trail[trail.length - 1];
+    if (!prev || map.distance(prev, p) > 3) {
+      trail.push(p);
+      if (trail.length > 2000) trail.shift();
+      trailLine.setLatLngs(trail);
+      try { localStorage.setItem("trail", JSON.stringify(trail)); } catch (e) {}
+    }
+  }
+  if (s.myFix && frMarker) {
+    link.setLatLngs([meMarker.getLatLng(), frMarker.getLatLng()]);
+    $("dist").textContent = fmtDist(map.distance(meMarker.getLatLng(), frMarker.getLatLng()));
+  } else {
+    $("dist").textContent = !s.myFix ? "내 GPS 없음" : !s.seen ? "상대 없음" : "상대 GPS 없음";
+  }
+  if (s.meet) {
+    const p = [s.wlat, s.wlon];
+    if (!meetMarker) meetMarker = L.marker(p, { icon: meetIcon, zIndexOffset: 50 }).addTo(map);
+    else meetMarker.setLatLng(p);
+  } else if (meetMarker) { map.removeLayer(meetMarker); meetMarker = null; }
+
+  if (!fittedOnce && meMarker) { fit(); fittedOnce = true; }
+}
+
+function fit() {
+  const pts = [meMarker, frMarker, meetMarker].filter(Boolean).map(m => m.getLatLng());
+  if (pts.length === 1) map.setView(pts[0], 17);
+  else if (pts.length > 1) map.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 18 });
+}
+
+setInterval(() => {
+  if (!statusChar || !device?.gatt.connected) return;
+  gatt(async () => {
+    try { render(parse(await statusChar.readValue())); } catch (e) {}
+  });
+}, 1000);
+
+function sendMeet(lat, lon) {
+  const b = new DataView(new ArrayBuffer(9));
+  b.setUint8(0, 1);
+  b.setInt32(1, Math.round(lat * 1e7), true);
+  b.setInt32(5, Math.round(lon * 1e7), true);
+  return gatt(() => cmdChar.writeValue(b.buffer));
+}
+
+$("btnFit").onclick = fit;
+$("btnPick").onclick = () => {
+  picking = !picking;
+  $("pickBanner").hidden = !picking;
+  $("btnPick").textContent = picking ? "지정 취소" : "만남 장소 지정";
+};
+map.on("click", async e => {
+  if (!picking) return;
+  picking = false;
+  $("pickBanner").hidden = true;
+  $("btnPick").textContent = "만남 장소 지정";
+  try {
+    await sendMeet(e.latlng.lat, e.latlng.lng);
+    say("만남 장소를 보냈어요. 상대 토템에는 다음 신호 때 전달돼요.");
+  } catch (err) { say("보내기 실패: " + err.message); }
+});
+$("btnClear").onclick = async () => {
+  try {
+    await gatt(() => cmdChar.writeValue(new Uint8Array([2])));
+    say("만남 장소를 지웠어요.");
+  } catch (err) { say("지우기 실패: " + err.message); }
+};
+$("btnTrail").onclick = () => {
+  trail = [];
+  trailLine.setLatLngs(trail);
+  try { localStorage.removeItem("trail"); } catch (e) {}
+  say("상대가 지나간 경로를 지웠어요.");
+};
+</script>
+</body>
+</html>
