@@ -114,6 +114,12 @@ button.love { color: var(--meet); border-color: var(--meet); }
 .heart-alert strong { font-size: 20px; }
 @keyframes beat { 50% { transform: scale(1.18); } }
 @media (prefers-reduced-motion: reduce) { .heart-alert .big { animation: none; } }
+.settings { border-top: 1px solid var(--line); padding-top: 8px; }
+.settings summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+.settings[open] { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; align-items: center; }
+.settings[open] summary { grid-column: 1 / -1; }
+.settings select { font: 15px var(--font-body); padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+.settings button { grid-column: 1 / -1; }
 </style>
 </head>
 <body>
@@ -127,7 +133,7 @@ button.love { color: var(--meet); border-color: var(--meet); }
   <div class="banner" id="pickBanner" hidden>지도를 눌러 만남 장소를 고르세요</div>
   <button class="heart-alert" id="pingAlert" hidden>
     <span class="big">♥</span>
-    <strong>상대가 보고싶대요</strong>
+    <strong id="pingText">상대가 보고싶대요</strong>
     <span class="note">눌러서 닫기</span>
   </button>
   <div class="empty" id="empty">
@@ -151,14 +157,29 @@ button.love { color: var(--meet); border-color: var(--meet); }
     <button id="btnFit" disabled>둘 다 보기</button>
   </div>
   <div class="row">
-    <button class="love" id="btnPing" disabled>♥ 보고싶어 보내기</button>
+    <button class="love msg" data-type="1" disabled>♥ 보고싶어</button>
+    <button class="msg" data-type="2" disabled>어디야?</button>
+    <button class="msg" data-type="3" disabled>곧 갈게</button>
   </div>
   <div class="row">
     <button id="btnPick" disabled>만남 장소 지정</button>
     <button class="danger" id="btnClear" disabled>만남 장소 지우기</button>
     <button id="btnTrail">경로 지우기</button>
   </div>
-  <p class="note" id="msg">만남 장소는 상대 토템에도 전달돼서, 양쪽 화면 원 안에 작은 동그라미로 방향이 표시돼요.</p>
+  <p class="note" id="msg">만남 장소는 상대 토템에도 전달돼서, 양쪽 화면에 점선 화살표로 방향이 표시돼요.</p>
+  <details class="settings">
+    <summary>토템 설정</summary>
+    <label for="selFar">멀어지면 알림</label>
+    <select id="selFar">
+      <option value="0">끔</option><option value="50">50m</option><option value="100">100m</option>
+      <option value="200">200m</option><option value="500">500m</option>
+    </select>
+    <label for="selScreen">화면 자동 꺼짐</label>
+    <select id="selScreen">
+      <option value="0">끔</option><option value="1">1분</option><option value="3">3분</option><option value="5">5분</option>
+    </select>
+    <button id="btnSave" disabled>이 토템에 저장</button>
+  </details>
 </section>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -217,8 +238,10 @@ async function connect() {
   cmdChar = await svc.getCharacteristic(CMD);
   setConn(device.name);
   $("empty").hidden = true;
-  ["btnFit", "btnPick", "btnClear", "btnPing"].forEach(id => $(id).disabled = false);
+  ["btnFit", "btnPick", "btnClear", "btnSave"].forEach(id => $(id).disabled = false);
+  document.querySelectorAll(".msg").forEach(b => b.disabled = false);
   lastPingRx = null;                    // 다시 연결되면 기준값부터 새로 받음
+  settingsLoaded = false;
   $("btnConnect").textContent = "다른 기기 연결";
   try { await navigator.wakeLock?.request("screen"); } catch (e) {}
 }
@@ -242,14 +265,26 @@ function parse(dv) {
     fsats: dv.getUint8(26), fbat: dv.getUint8(27),
     wlat: dv.getInt32(28, true) / 1e7, wlon: dv.getInt32(32, true) / 1e7,
     pingRx: dv.byteLength >= 38 ? dv.getUint8(36) : null,
-    pingTx: dv.byteLength >= 38 ? dv.getUint8(37) : 0
+    pingTx: dv.byteLength >= 38 ? dv.getUint8(37) : 0,
+    msgRx: dv.byteLength >= 42 ? dv.getUint8(38) : 1,
+    farM: dv.byteLength >= 42 ? dv.getUint16(39, true) : null,
+    screenMin: dv.byteLength >= 42 ? dv.getUint8(41) : null
   };
 }
 
-let lastPingRx = null, lastPingTx = 0;
+const MSG_ALERT = { 1: ["♥", "상대가 보고싶대요"], 2: ["?", "상대가 어디냐고 물어요"], 3: ["→", "상대가 곧 온대요"] };
+let lastPingRx = null, lastPingTx = 0, settingsLoaded = false;
 function handlePing(s) {
+  if (s.farM !== null && !settingsLoaded) {   // 기기에 저장된 설정을 처음 한 번 표시
+    $("selFar").value = String(s.farM);
+    $("selScreen").value = String(s.screenMin);
+    settingsLoaded = true;
+  }
   if (s.pingRx === null) return;        // 예전 펌웨어
   if (lastPingRx !== null && s.pingRx !== lastPingRx) {
+    const [icon, text] = MSG_ALERT[s.msgRx] || MSG_ALERT[1];
+    document.querySelector("#pingAlert .big").textContent = icon;
+    $("pingText").textContent = text;
     $("pingAlert").hidden = false;
     try { navigator.vibrate?.([200, 100, 200, 100, 400]); } catch (e) {}
   }
@@ -346,11 +381,21 @@ $("btnClear").onclick = async () => {
     say("만남 장소를 지웠어요.");
   } catch (err) { say("지우기 실패: " + err.message); }
 };
-$("btnPing").onclick = async () => {
+document.querySelectorAll(".msg").forEach(btn => {
+  btn.onclick = async () => {
+    try {
+      await gatt(() => cmdChar.writeValue(new Uint8Array([3, Number(btn.dataset.type)])));
+      say(last && last.seen ? `"${btn.textContent.replace("♥ ", "")}"를 보냈어요. 전달되면 알려드릴게요.`
+                            : "보냈어요. 상대 신호가 잡히면 전달돼요.");
+    } catch (err) { say("보내기 실패: " + err.message); }
+  };
+});
+$("btnSave").onclick = async () => {
+  const far = Number($("selFar").value), scr = Number($("selScreen").value);
   try {
-    await gatt(() => cmdChar.writeValue(new Uint8Array([3])));
-    say(last && last.seen ? "보고싶어를 보냈어요. 전달되면 알려드릴게요." : "보냈어요. 상대 신호가 잡히면 전달돼요.");
-  } catch (err) { say("보내기 실패: " + err.message); }
+    await gatt(() => cmdChar.writeValue(new Uint8Array([4, far & 255, far >> 8, scr])));
+    say("설정을 이 토템에 저장했어요. 상대 토템은 그 토템에 연결해서 따로 정해요.");
+  } catch (err) { say("저장 실패: " + err.message); }
 };
 $("pingAlert").onclick = () => { $("pingAlert").hidden = true; };
 $("btnTrail").onclick = () => {
