@@ -34,6 +34,8 @@
   }
 }
 * { box-sizing: border-box; }
+/* hidden 속성이 display: grid 같은 규칙에 덮이지 않게 (알림 창이 안 닫히던 원인) */
+[hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--paper); color: var(--ink);
