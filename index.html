@@ -183,6 +183,7 @@ button.love { color: var(--meet); border-color: var(--meet); }
       <option value="0">끔</option><option value="1">1분</option><option value="3">3분</option><option value="5">5분</option>
     </select>
     <button id="btnSave" disabled>이 토템에 저장</button>
+    <button class="danger" id="btnDisconnect" hidden>연결 끊기 (앱이 토템과 연결을 멈춤)</button>
     <label class="check" for="chkPhoneLoc">
       <input type="checkbox" id="chkPhoneLoc" checked>
       토템 GPS가 안 잡히면 이 폰의 위치를 빌려주기 (실내용, 화면이 켜져 있어야 함)
@@ -218,7 +219,23 @@ let fittedOnce = false, picking = false, last = null;
 let queue = Promise.resolve();          // GATT 작업은 하나씩
 const gatt = fn => (queue = queue.then(fn, fn));
 
-if (!navigator.bluetooth) {
+// 안드로이드 앱 안에서 열리면 웹 블루투스 대신 앱(TotemService)이 연결을 맡음.
+// 앱은 화면을 닫아도 연결을 유지하고, 상태를 window.onTotemStatus 로 넣어 줌
+const NATIVE = window.TotemNative || null;
+let nativeConnected = false;
+
+// 토템에 명령 보내기 (웹이든 앱이든 같은 형식)
+function send(bytes) {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (NATIVE) {
+    NATIVE.write(btoa(String.fromCharCode(...u8)));
+    return Promise.resolve();
+  }
+  return gatt(() => cmdChar.writeValue(u8));
+}
+const linked = () => NATIVE ? nativeConnected : !!(cmdChar && device?.gatt.connected);
+
+if (!navigator.bluetooth && !NATIVE) {
   $("unsupported").hidden = false;
   $("btnConnect").disabled = true;
 }
@@ -227,6 +244,10 @@ function setConn(text) { $("conn").textContent = text; }
 function say(text) { $("msg").textContent = text; }
 
 $("btnConnect").onclick = async () => {
+  if (NATIVE) {
+    if (nativeConnected) NATIVE.pick(); else NATIVE.connect();
+    return;
+  }
   try {
     device = await navigator.bluetooth.requestDevice({
       filters: [{ namePrefix: "TOTEM" }], optionalServices: [SVC]
@@ -244,27 +265,51 @@ async function connect() {
   const svc = await server.getPrimaryService(SVC);
   statusChar = await svc.getCharacteristic(STATUS);
   cmdChar = await svc.getCharacteristic(CMD);
-  setConn(device.name);
+  showConnected(device.name);
+  try { await navigator.wakeLock?.request("screen"); } catch (e) {}
+  startPhoneLoc();
+}
+
+function showConnected(name) {
+  setConn(name);
   $("empty").hidden = true;
   ["btnFit", "btnPick", "btnClear", "btnSave"].forEach(id => $(id).disabled = false);
   document.querySelectorAll(".msg").forEach(b => b.disabled = false);
   lastPingRx = null;                    // 다시 연결되면 기준값부터 새로 받음
   settingsLoaded = false;
   $("btnConnect").textContent = "다른 기기 연결";
-  try { await navigator.wakeLock?.request("screen"); } catch (e) {}
-  startPhoneLoc();
+}
+
+// ---- 앱 모드: 서비스가 넣어 주는 상태와 연결 변화 ----
+if (NATIVE) {
+  window.onTotemStatus = b64 => {
+    const bin = atob(b64), u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    render(parse(new DataView(u8.buffer)));
+  };
+  window.onTotemConn = (state, name) => {
+    const was = nativeConnected;
+    nativeConnected = state === "connected";
+    if (nativeConnected && !was) showConnected(name);
+    else if (state === "connecting") setConn("연결 중…");
+    else if (state === "reconnecting") setConn("다시 연결 중…");
+    else if (state === "idle") { setConn("연결 안 됨"); $("btnConnect").textContent = "연결"; }
+  };
+  $("btnDisconnect").hidden = false;
+  $("btnDisconnect").onclick = () => { NATIVE.disconnect(); say("연결을 끊었어요. 다시 연결하려면 연결을 누르세요."); };
 }
 
 // ---- 폰 위치 빌려주기: 토템 GPS가 안 잡히는 실내에서 폰 위치(와이파이 기반)를 토템에 보냄 ----
 let phonePos = null, geoWatch = null, lastLocSent = 0;
-try { $("chkPhoneLoc").checked = localStorage.getItem("phoneLoc") !== "off"; } catch (e) {}
+try { $("chkPhoneLoc").checked = NATIVE ? NATIVE.getPhoneLoc() : localStorage.getItem("phoneLoc") !== "off"; } catch (e) {}
 $("chkPhoneLoc").onchange = () => {
+  if (NATIVE) { NATIVE.setPhoneLoc($("chkPhoneLoc").checked); return; }   // 앱은 서비스가 위치를 보냄
   try { localStorage.setItem("phoneLoc", $("chkPhoneLoc").checked ? "on" : "off"); } catch (e) {}
   if ($("chkPhoneLoc").checked) startPhoneLoc();
 };
 
 function startPhoneLoc() {
-  if (geoWatch !== null || !$("chkPhoneLoc").checked || !navigator.geolocation) return;
+  if (NATIVE || geoWatch !== null || !$("chkPhoneLoc").checked || !navigator.geolocation) return;
   geoWatch = navigator.geolocation.watchPosition(
     p => { phonePos = p; sendPhoneLoc(); },
     e => { if (e.code === 1) say("위치 권한이 꺼져 있어서 폰 위치를 빌려줄 수 없어요. 크롬 주소창 옆 ⓘ에서 위치를 허용해 주세요."); },
@@ -273,7 +318,7 @@ function startPhoneLoc() {
 }
 
 function sendPhoneLoc() {
-  if (!phonePos || !cmdChar || !device?.gatt.connected || !$("chkPhoneLoc").checked) return;
+  if (NATIVE || !phonePos || !linked() || !$("chkPhoneLoc").checked) return;
   if (Date.now() - phonePos.timestamp > 120000) return;   // 너무 오래된 위치
   if (Date.now() - lastLocSent < 3000) return;
   lastLocSent = Date.now();
@@ -283,7 +328,7 @@ function sendPhoneLoc() {
   b.setInt32(1, Math.round(c.latitude * 1e7), true);
   b.setInt32(5, Math.round(c.longitude * 1e7), true);
   b.setUint16(9, Math.min(65535, Math.round(c.accuracy)), true);
-  gatt(() => cmdChar.writeValue(b.buffer)).catch(() => {});
+  send(b.buffer).catch(() => {});
 }
 // 가만히 있으면 위치 이벤트가 안 와서, 마지막 위치를 5초마다 다시 보냄 (토템은 15초 지나면 버림)
 setInterval(sendPhoneLoc, 5000);
@@ -401,7 +446,7 @@ function sendMeet(lat, lon) {
   b.setUint8(0, 1);
   b.setInt32(1, Math.round(lat * 1e7), true);
   b.setInt32(5, Math.round(lon * 1e7), true);
-  return gatt(() => cmdChar.writeValue(b.buffer));
+  return send(b.buffer);
 }
 
 $("btnFit").onclick = fit;
@@ -422,14 +467,14 @@ map.on("click", async e => {
 });
 $("btnClear").onclick = async () => {
   try {
-    await gatt(() => cmdChar.writeValue(new Uint8Array([2])));
+    await send([2]);
     say("만남 장소를 지웠어요.");
   } catch (err) { say("지우기 실패: " + err.message); }
 };
 document.querySelectorAll(".msg").forEach(btn => {
   btn.onclick = async () => {
     try {
-      await gatt(() => cmdChar.writeValue(new Uint8Array([3, Number(btn.dataset.type)])));
+      await send([3, Number(btn.dataset.type)]);
       say(last && last.seen ? `"${btn.textContent.replace("♥ ", "")}"를 보냈어요. 전달되면 알려드릴게요.`
                             : "보냈어요. 상대 신호가 잡히면 전달돼요.");
     } catch (err) { say("보내기 실패: " + err.message); }
@@ -438,7 +483,7 @@ document.querySelectorAll(".msg").forEach(btn => {
 $("btnSave").onclick = async () => {
   const far = Number($("selFar").value), scr = Number($("selScreen").value);
   try {
-    await gatt(() => cmdChar.writeValue(new Uint8Array([4, far & 255, far >> 8, scr])));
+    await send([4, far & 255, far >> 8, scr]);
     say("설정을 이 토템에 저장했어요. 상대 토템은 그 토템에 연결해서 따로 정해요.");
   } catch (err) { say("저장 실패: " + err.message); }
 };
@@ -449,6 +494,9 @@ $("btnTrail").onclick = () => {
   try { localStorage.removeItem("trail"); } catch (e) {}
   say("상대가 지나간 경로를 지웠어요.");
 };
+
+// 앱: 화면 준비 끝 -> 지금 연결 상태를 받고, 전에 쓰던 토템이 있으면 자동 연결
+if (NATIVE) NATIVE.ready();
 </script>
 </body>
 </html>
