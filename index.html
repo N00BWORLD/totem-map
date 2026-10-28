@@ -234,7 +234,8 @@ button.find-open { background: var(--friend); border-color: var(--friend); color
       <circle cx="100" cy="100" r="92" fill="none" stroke="var(--line)" stroke-width="4"/>
       <g id="northMark"><text x="100" y="24" text-anchor="middle" font-size="16" font-weight="700" fill="var(--muted)">N</text></g>
       <g class="needle" id="needle">
-        <path d="M100 18 L132 112 L100 96 L68 112 Z" fill="var(--friend)"/>
+        <path id="wedge" d="" fill="var(--friend)" fill-opacity=".22" stroke="var(--friend)" stroke-opacity=".5" stroke-width="1.5"/>
+        <path id="arrow" d="M100 18 L132 112 L100 96 L68 112 Z" fill="var(--friend)"/>
       </g>
       <circle cx="100" cy="100" r="7" fill="var(--ink)"/>
     </svg>
@@ -597,7 +598,7 @@ $("btnSave").onclick = async () => {
 
 // ---- 상대 찾기: 폰 GPS + 폰 나침반으로 화살표, 실내에서는 신호 세기 ----
 let findOpen = false, findGeo = null, findPos = null, phoneHeading = null, compassStarted = false;
-let needleTarget = null, needleRot = 0, findOn = false, lastRssi = null;
+let needleTarget = null, needleSpread = 0, needleRot = 0, findOn = false, lastRssi = null;
 let beepOn = false, audio = null, beepTimer = null;
 
 $("btnFind").onclick = () => {
@@ -660,6 +661,7 @@ function renderFind(s) {
   const me = myPosition(s);
   const fr = s.seen && s.frFix && s.age < 120 ? { lat: s.flat, lon: s.flon, acc: s.facc || 10 } : null;
   needleTarget = null;
+  needleSpread = 0;
   if (me && fr) {
     const d = L.latLng(me.lat, me.lon).distanceTo([fr.lat, fr.lon]);
     const err = Math.round(me.acc + fr.acc);
@@ -668,6 +670,7 @@ function renderFind(s) {
       $("findInfo").textContent = `위치 오차(±${err}m)가 거리보다 커서 방향을 믿기 어려워요. 아래 신호 세기로 찾아보세요.`;
     } else {
       needleTarget = bearing(me, fr);
+      needleSpread = Math.asin(err / d) * 180 / Math.PI;   // 위치 오차만큼 방향도 ±이만큼 틀릴 수 있음
       $("findDist").textContent = fmtDist(d);
       $("findInfo").textContent = `${compassName(needleTarget)}쪽 · ${me.src} ±${Math.round(me.acc)}m · ${name} 위치 ${s.age}초 전 ±${Math.round(fr.acc)}m`;
     }
@@ -681,7 +684,8 @@ function renderFind(s) {
   const f = s.find;
   if (needleTarget === null && f && f.on && f.scanReady && f.scanSpread >= 4) {
     needleTarget = f.scanDir;
-    $("findInfo").textContent += " 화살표는 토템이 잰 신호가 센 쪽이에요 (대략).";
+    needleSpread = 30;
+    $("findInfo").textContent += " 부채꼴은 토템이 잰 신호가 센 쪽이에요 (대략).";
   }
   drawNeedle();
   renderSignal(s);
@@ -695,8 +699,18 @@ function drawNeedle() {
   const want = (needleTarget === null ? 0 : needleTarget) - ref;
   needleRot += ((want - needleRot) % 360 + 540) % 360 - 180;   // 359→0도에서 한 바퀴 도는 것 방지
   n.style.transform = `rotate(${needleRot}deg)`;
+  // 방향 오차가 10도 넘으면 화살표 대신 부채꼴 (넓을수록 불확실)
+  const h = needleTarget === null || needleSpread < 10 ? 0 : Math.min(needleSpread, 90);
+  $("wedge").setAttribute("d", h ? wedgePath(h) : "");
+  $("arrow").style.opacity = h ? 0.35 : 1;
   $("findCompass").hidden = phoneHeading !== null;
   $("findCompass").textContent = "폰 나침반을 쓸 수 없어서 화살표는 위쪽이 북쪽이에요.";
+}
+
+// 위쪽 기준 ±h도 부채꼴 (반지름 88, 바늘과 같이 회전)
+function wedgePath(h) {
+  const r = h * Math.PI / 180, x = 88 * Math.sin(r), y = 88 * Math.cos(r);
+  return `M100 100 L${(100 - x).toFixed(1)} ${(100 - y).toFixed(1)} A88 88 0 0 1 ${(100 + x).toFixed(1)} ${(100 - y).toFixed(1)} Z`;
 }
 
 function renderSignal(s) {
