@@ -124,6 +124,35 @@ button.love { color: var(--meet); border-color: var(--meet); }
 .settings button { grid-column: 1 / -1; }
 .settings .check { grid-column: 1 / -1; display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
 .settings .check input { margin-top: 3px; }
+.settings input[type=text] { font: 15px var(--font-body); padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); min-width: 0; }
+button.find-open { background: var(--friend); border-color: var(--friend); color: #fff; }
+/* 상대 찾기: 폰 화면 전체에 화살표 + 실내용 신호 */
+.find {
+  position: fixed; inset: 0; z-index: 1000; overflow-y: auto;
+  background: var(--sheet); color: var(--ink);
+  padding-block: calc(12px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 14px; align-content: start;
+}
+.find-top { display: flex; align-items: center; gap: 8px; }
+.find-top h2 { flex: 1; margin: 0; font-size: 18px; }
+.find-top button { flex: 0 0 auto; }
+.dial { width: min(62vw, 240px); aspect-ratio: 1; margin: 0 auto; position: relative; }
+.dial svg { width: 100%; height: 100%; display: block; }
+.dial .needle, #northMark { transition: transform .25s ease-out; transform-origin: 100px 100px; }
+@media (prefers-reduced-motion: reduce) { .dial .needle { transition: none; } }
+.bigdist { font: 600 40px var(--font-data); text-align: center; font-variant-numeric: tabular-nums; color: var(--friend); line-height: 1.1; }
+.center { text-align: center; }
+.card { border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; display: grid; gap: 10px; }
+.card h3 { margin: 0; font-size: 15px; }
+.gauge { height: 14px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.gauge > div { height: 100%; width: 0; background: var(--friend); transition: width .3s; }
+.sig { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sig .v { font: 600 30px var(--font-data); font-variant-numeric: tabular-nums; }
+.trend { font-weight: 600; }
+.trend.up { color: var(--ok); }
+.trend.down { color: var(--meet); }
 </style>
 </head>
 <body>
@@ -137,6 +166,7 @@ button.love { color: var(--meet); border-color: var(--meet); }
   <div class="banner" id="pickBanner" hidden>지도를 눌러 만남 장소를 고르세요</div>
   <button class="heart-alert" id="pingAlert" hidden>
     <span class="big">♥</span>
+    <span id="pingWho" class="note"></span>
     <strong id="pingText">상대가 보고싶대요</strong>
     <span class="note">눌러서 닫기</span>
   </button>
@@ -149,7 +179,7 @@ button.love { color: var(--meet); border-color: var(--meet); }
 
 <section class="sheet">
   <div class="readout">
-    <div><span class="k">상대까지</span><span class="v big" id="dist">—</span></div>
+    <div><span class="k" id="distLabel">상대까지</span><span class="v big" id="dist">—</span></div>
     <div><span class="k">마지막 신호</span><span class="v" id="age">—</span></div>
     <div><span class="k">신호 세기</span><span class="v" id="rssi">—</span></div>
     <div><span class="k">내 위성</span><span class="v" id="sats">—</span></div>
@@ -158,6 +188,7 @@ button.love { color: var(--meet); border-color: var(--meet); }
   </div>
   <div class="row">
     <button class="primary" id="btnConnect">연결</button>
+    <button class="find-open" id="btnFind" disabled>상대 찾기</button>
     <button id="btnFit" disabled>둘 다 보기</button>
   </div>
   <div class="row">
@@ -173,6 +204,8 @@ button.love { color: var(--meet); border-color: var(--meet); }
   <p class="note" id="msg">만남 장소는 상대 토템에도 전달돼서, 양쪽 화면에 점선 화살표로 방향이 표시돼요.</p>
   <details class="settings">
     <summary>토템 설정</summary>
+    <label for="inName">내 이름</label>
+    <input type="text" id="inName" maxlength="12" placeholder="토템 화면 맨 위에 보여요" autocomplete="nickname">
     <label for="selFar">멀어지면 알림</label>
     <select id="selFar">
       <option value="0">끔</option><option value="50">50m</option><option value="100">100m</option>
@@ -189,6 +222,44 @@ button.love { color: var(--meet); border-color: var(--meet); }
       토템 GPS가 안 잡히면 이 폰의 위치를 빌려주기 (실내용, 화면이 켜져 있어야 함)
     </label>
   </details>
+</section>
+
+<section class="find" id="find" hidden aria-label="상대 찾기">
+  <div class="find-top">
+    <h2 id="findTitle">상대 찾기</h2>
+    <button id="btnFindClose">닫기</button>
+  </div>
+  <div class="dial">
+    <svg viewBox="0 0 200 200" aria-hidden="true">
+      <circle cx="100" cy="100" r="92" fill="none" stroke="var(--line)" stroke-width="4"/>
+      <g id="northMark"><text x="100" y="24" text-anchor="middle" font-size="16" font-weight="700" fill="var(--muted)">N</text></g>
+      <g class="needle" id="needle">
+        <path d="M100 18 L132 112 L100 96 L68 112 Z" fill="var(--friend)"/>
+      </g>
+      <circle cx="100" cy="100" r="7" fill="var(--ink)"/>
+    </svg>
+  </div>
+  <div class="bigdist" id="findDist">—</div>
+  <p class="note center" id="findInfo">상대 위치를 기다리는 중…</p>
+  <p class="note center warn" id="findCompass" hidden></p>
+
+  <div class="card">
+    <h3>실내에서 찾기 (신호 세기)</h3>
+    <div class="sig">
+      <span class="v" id="sigVal">—</span><span class="note">dBm</span>
+      <span class="trend" id="sigTrend"></span>
+    </div>
+    <div class="gauge"><div id="sigBar"></div></div>
+    <p class="note" id="scanInfo">찾기를 켜면 두 토템이 1초마다 신호를 주고받아요. 토템을 몸 앞에 들고 제자리에서 천천히 한 바퀴 돌면 신호가 센 쪽을 알려 줘요.</p>
+    <div class="row">
+      <button class="primary" id="btnFindMode">찾기 켜기</button>
+      <button id="btnRescan" disabled>방향 다시 재기</button>
+    </div>
+    <div class="row">
+      <button id="btnBeep">삐 소리 켜기</button>
+      <button class="love" id="btnFlash">상대 토템 깜박이게</button>
+    </div>
+  </div>
 </section>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -273,7 +344,7 @@ async function connect() {
 function showConnected(name) {
   setConn(name);
   $("empty").hidden = true;
-  ["btnFit", "btnPick", "btnClear", "btnSave"].forEach(id => $(id).disabled = false);
+  ["btnFit", "btnFind", "btnPick", "btnClear", "btnSave"].forEach(id => $(id).disabled = false);
   document.querySelectorAll(".msg").forEach(b => b.disabled = false);
   lastPingRx = null;                    // 다시 연결되면 기준값부터 새로 받음
   settingsLoaded = false;
@@ -355,28 +426,47 @@ function parse(dv) {
     pingTx: dv.byteLength >= 38 ? dv.getUint8(37) : 0,
     msgRx: dv.byteLength >= 42 ? dv.getUint8(38) : 1,
     farM: dv.byteLength >= 42 ? dv.getUint16(39, true) : null,
-    screenMin: dv.byteLength >= 42 ? dv.getUint8(41) : null
+    screenMin: dv.byteLength >= 42 ? dv.getUint8(41) : null,
+    // 펌웨어 4.1부터: 실내 찾기, 위치 오차, 이름
+    find: dv.byteLength >= 54 ? {
+      on: !!(dv.getUint8(42) & 1), friendOn: !!(dv.getUint8(42) & 2), scanReady: !!(dv.getUint8(42) & 4),
+      rssiAvg: dv.getInt16(43, true), trend: dv.getInt8(45),
+      scanDir: dv.getUint16(46, true), scanSpread: dv.getUint8(48), scanCover: dv.getUint8(49)
+    } : null,
+    acc: dv.byteLength >= 54 ? dv.getUint16(50, true) : 0,
+    facc: dv.byteLength >= 54 ? dv.getUint16(52, true) : 0,
+    myName: dv.byteLength >= 78 ? readName(dv, 54) : "",
+    frName: dv.byteLength >= 78 ? readName(dv, 66) : ""
   };
 }
 
-const MSG_ALERT = { 1: ["♥", "상대가 보고싶대요"], 2: ["?", "상대가 어디냐고 물어요"], 3: ["→", "상대가 곧 온대요"] };
+function readName(dv, off) {
+  const b = new Uint8Array(dv.buffer, dv.byteOffset + off, 12);
+  const end = b.indexOf(0);
+  return new TextDecoder().decode(end < 0 ? b : b.subarray(0, end));
+}
+
+const who = s => (s && s.frName) || "상대";
+const MSG_ALERT = { 1: ["♥", "보고싶대요"], 2: ["?", "어디냐고 물어요"], 3: ["→", "곧 온대요"], 4: ["!", "나를 찾고 있대요. 내 토템이 깜박여요"] };
 let lastPingRx = null, lastPingTx = 0, settingsLoaded = false;
 function handlePing(s) {
   if (s.farM !== null && !settingsLoaded) {   // 기기에 저장된 설정을 처음 한 번 표시
     $("selFar").value = String(s.farM);
     $("selScreen").value = String(s.screenMin);
+    if (s.myName && document.activeElement !== $("inName")) $("inName").value = s.myName;
     settingsLoaded = true;
   }
   if (s.pingRx === null) return;        // 예전 펌웨어
   if (lastPingRx !== null && s.pingRx !== lastPingRx) {
     const [icon, text] = MSG_ALERT[s.msgRx] || MSG_ALERT[1];
     document.querySelector("#pingAlert .big").textContent = icon;
+    $("pingWho").textContent = who(s);
     $("pingText").textContent = text;
     $("pingAlert").hidden = false;
     try { navigator.vibrate?.([200, 100, 200, 100, 400]); } catch (e) {}
   }
   lastPingRx = s.pingRx;
-  if (s.pingTx === 2 && lastPingTx !== 2) say("♥ 상대 토템에 전달됐어요.");
+  if (s.pingTx === 2 && lastPingTx !== 2) say(`${who(s)}의 토템에 전달됐어요.`);
   lastPingTx = s.pingTx;
 }
 
@@ -385,6 +475,9 @@ function fmtDist(m) { return m < 1000 ? Math.round(m) + "m" : (m / 1000).toFixed
 function render(s) {
   last = s;
   handlePing(s);
+  $("distLabel").textContent = who(s) + "까지";
+  if (s.myName) setConn(s.myName);
+  renderFind(s);
   $("sats").textContent = s.phoneLoc ? "폰 위치 사용" : s.myFix ? s.sats + "개" : "찾는 중";
   $("bat").textContent = s.bat + "%";
   $("fbat").textContent = s.seen ? s.fbat + "%" : "—";
@@ -480,13 +573,200 @@ document.querySelectorAll(".msg").forEach(btn => {
     } catch (err) { say("보내기 실패: " + err.message); }
   };
 });
+// 이름은 UTF-8 12바이트(한글 4글자)까지, 글자 중간에서 자르지 않음
+function nameBytes(str) {
+  const enc = new TextEncoder();
+  let out = [];
+  for (const ch of str.trim()) {
+    const b = [...enc.encode(ch)];
+    if (out.length + b.length > 12) break;
+    out = out.concat(b);
+  }
+  return out;
+}
+
 $("btnSave").onclick = async () => {
   const far = Number($("selFar").value), scr = Number($("selScreen").value);
   try {
     await send([4, far & 255, far >> 8, scr]);
+    const name = nameBytes($("inName").value);
+    if (name.length && last && last.find !== null) await send([7, ...name]);   // 이름은 펌웨어 4.1부터
     say("설정을 이 토템에 저장했어요. 상대 토템은 그 토템에 연결해서 따로 정해요.");
   } catch (err) { say("저장 실패: " + err.message); }
 };
+
+// ---- 상대 찾기: 폰 GPS + 폰 나침반으로 화살표, 실내에서는 신호 세기 ----
+let findOpen = false, findGeo = null, findPos = null, phoneHeading = null, compassStarted = false;
+let needleTarget = null, needleRot = 0, findOn = false, lastRssi = null;
+let beepOn = false, audio = null, beepTimer = null;
+
+$("btnFind").onclick = () => {
+  findOpen = true;
+  $("find").hidden = false;
+  if (navigator.geolocation && findGeo === null) {
+    findGeo = navigator.geolocation.watchPosition(
+      p => { findPos = p; if (last) renderFind(last); }, () => {},
+      { enableHighAccuracy: true, maximumAge: 3000 });
+  }
+  startCompass();
+  try { navigator.wakeLock?.request("screen").catch(() => {}); } catch (e) {}
+  if (last) renderFind(last);
+};
+$("btnFindClose").onclick = () => {
+  findOpen = false;
+  $("find").hidden = true;
+  if (findGeo !== null) { navigator.geolocation.clearWatch(findGeo); findGeo = null; }
+  setBeep(false);
+};
+
+async function startCompass() {
+  if (compassStarted) return;
+  // iOS는 버튼을 누른 순간에 권한을 물어야 함
+  if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+    try { if (await DeviceOrientationEvent.requestPermission() !== "granted") return; } catch (e) { return; }
+  }
+  compassStarted = true;
+  const onOri = e => {
+    let h = null;
+    if (typeof e.webkitCompassHeading === "number") h = e.webkitCompassHeading;   // iOS
+    else if (e.absolute && e.alpha !== null) h = 360 - e.alpha;                    // 안드로이드 크롬
+    if (h === null) return;
+    phoneHeading = (h + ((screen.orientation && screen.orientation.angle) || 0) + 360) % 360;
+    if (findOpen) drawNeedle();
+  };
+  window.addEventListener("deviceorientationabsolute", onOri);
+  window.addEventListener("deviceorientation", onOri);
+}
+
+// 내 위치: 폰 GPS가 새로우면 폰, 아니면 토템 위치 (토템 GPS 또는 앱이 빌려준 폰 위치)
+function myPosition(s) {
+  if (findPos && Date.now() - findPos.timestamp < 30000)
+    return { lat: findPos.coords.latitude, lon: findPos.coords.longitude, acc: findPos.coords.accuracy, src: "폰 GPS" };
+  if (s.myFix) return { lat: s.lat, lon: s.lon, acc: s.acc || 10, src: s.phoneLoc ? "폰 위치" : "토템 GPS" };
+  return null;
+}
+
+function bearing(a, b) {
+  const r = Math.PI / 180, p1 = a.lat * r, p2 = b.lat * r, dl = (b.lon - a.lon) * r;
+  const y = Math.sin(dl) * Math.cos(p2), x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  return (Math.atan2(y, x) / r + 360) % 360;
+}
+const compassName = d => ["북", "북동", "동", "남동", "남", "남서", "서", "북서"][Math.round(d / 45) % 8];
+
+function renderFind(s) {
+  if (!findOpen) return;
+  const name = who(s);
+  $("findTitle").textContent = name + " 찾기";
+  const me = myPosition(s);
+  const fr = s.seen && s.frFix && s.age < 120 ? { lat: s.flat, lon: s.flon, acc: s.facc || 10 } : null;
+  needleTarget = null;
+  if (me && fr) {
+    const d = L.latLng(me.lat, me.lon).distanceTo([fr.lat, fr.lon]);
+    const err = Math.round(me.acc + fr.acc);
+    if (d < err) {
+      $("findDist").textContent = "근처예요";
+      $("findInfo").textContent = `위치 오차(±${err}m)가 거리보다 커서 방향을 믿기 어려워요. 아래 신호 세기로 찾아보세요.`;
+    } else {
+      needleTarget = bearing(me, fr);
+      $("findDist").textContent = fmtDist(d);
+      $("findInfo").textContent = `${compassName(needleTarget)}쪽 · ${me.src} ±${Math.round(me.acc)}m · ${name} 위치 ${s.age}초 전 ±${Math.round(fr.acc)}m`;
+    }
+  } else {
+    $("findDist").textContent = "—";
+    $("findInfo").textContent = !s.seen ? `${name}의 신호가 아직 없어요.`
+      : !fr ? `${name}의 위치를 아직 몰라요. 아래 신호 세기로 찾아보세요.`
+      : "내 위치를 찾는 중이에요. 위치 권한을 확인해 주세요.";
+  }
+  // 위치로 방향을 못 정하면 토템이 한 바퀴 돌며 잰 '신호가 센 쪽'
+  const f = s.find;
+  if (needleTarget === null && f && f.on && f.scanReady && f.scanSpread >= 4) {
+    needleTarget = f.scanDir;
+    $("findInfo").textContent += " 화살표는 토템이 잰 신호가 센 쪽이에요 (대략).";
+  }
+  drawNeedle();
+  renderSignal(s);
+}
+
+function drawNeedle() {
+  const ref = phoneHeading !== null ? phoneHeading : 0;   // 나침반이 없으면 위쪽 = 북쪽
+  $("northMark").style.transform = `rotate(${-ref}deg)`;
+  const n = $("needle");
+  n.style.opacity = needleTarget === null ? 0.15 : 1;
+  const want = (needleTarget === null ? 0 : needleTarget) - ref;
+  needleRot += ((want - needleRot) % 360 + 540) % 360 - 180;   // 359→0도에서 한 바퀴 도는 것 방지
+  n.style.transform = `rotate(${needleRot}deg)`;
+  $("findCompass").hidden = phoneHeading !== null;
+  $("findCompass").textContent = "폰 나침반을 쓸 수 없어서 화살표는 위쪽이 북쪽이에요.";
+}
+
+function renderSignal(s) {
+  const f = s.find, fresh = s.seen && s.age < 20;
+  const rssi = f ? f.rssiAvg : s.rssi;
+  lastRssi = fresh ? rssi : null;
+  $("sigVal").textContent = fresh ? rssi : "—";
+  $("sigBar").style.width = fresh ? Math.max(0, Math.min(100, (rssi + 120) / 80 * 100)) + "%" : "0";
+  const t = f && fresh ? f.trend : 0;
+  $("sigTrend").textContent = !fresh ? (s.seen ? "신호 끊김" : "") : !f ? "" : t > 0 ? "가까워지고 있어요" : t < 0 ? "멀어지고 있어요" : "그대로예요";
+  $("sigTrend").className = "trend" + (t > 0 ? " up" : t < 0 ? " down" : "");
+  if (!f) {
+    $("btnFindMode").disabled = $("btnRescan").disabled = true;
+    $("scanInfo").textContent = "토템 펌웨어를 4.1 이상으로 올리면 실내 찾기를 쓸 수 있어요.";
+    return;
+  }
+  findOn = f.on;
+  $("btnFindMode").disabled = false;
+  $("btnFindMode").textContent = f.on ? "찾기 끄기" : "찾기 켜기";
+  $("btnRescan").disabled = !f.on;
+  $("scanInfo").textContent = !f.on
+    ? (f.friendOn ? `${who(s)}도 지금 찾고 있어요. 찾기를 켜면 같이 빨라져요.`
+                  : "찾기를 켜면 두 토템이 1초마다 신호를 주고받아요. 토템을 몸 앞에 들고 제자리에서 천천히 한 바퀴 돌면 신호가 센 쪽을 알려 줘요.")
+    : !f.scanReady ? `토템을 몸 앞에 들고 제자리에서 천천히 한 바퀴 도세요 (${f.scanCover}/12 방향)`
+    : f.scanSpread >= 4 ? `신호가 센 쪽: ${compassName(f.scanDir)} (${f.scanDir}°). 그쪽으로 걸으면서 숫자가 커지는지 보세요.`
+    : "방향별 차이가 작아요. 조금 옮긴 뒤 '방향 다시 재기'를 눌러 보세요.";
+}
+
+$("btnFindMode").onclick = () => send([6, findOn ? 0 : 1]).catch(err => say("실패: " + err.message));
+$("btnRescan").onclick = () => send([6, 2]).catch(err => say("실패: " + err.message));
+$("btnFlash").onclick = async () => {
+  try {
+    await send([3, 4]);
+    say(`${who(last)}의 토템을 깜박이게 했어요. 화면과 불빛이 번쩍이는 쪽을 찾아보세요.`);
+  } catch (err) { say("보내기 실패: " + err.message); }
+};
+// 화면을 열어 둔 동안 찾기가 3분 만에 꺼지지 않게 연장
+setInterval(() => { if (findOpen && findOn && linked()) send([6, 1]).catch(() => {}); }, 60000);
+
+// 금속탐지기처럼 신호가 셀수록 빠르고 높은 삐 소리 + 진동
+$("btnBeep").onclick = () => setBeep(!beepOn);
+function setBeep(on) {
+  beepOn = on;
+  $("btnBeep").textContent = on ? "삐 소리 끄기" : "삐 소리 켜기";
+  clearTimeout(beepTimer);
+  if (!on) return;
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch (e) {}
+  tick();
+}
+function tick() {
+  if (!beepOn) return;
+  let wait = 1500;
+  if (lastRssi !== null) {
+    const k = Math.max(0, Math.min(1, (lastRssi + 115) / 75));   // -115dBm → 0, -40dBm → 1
+    wait = 1600 - k * 1450;
+    beep(500 + k * 700);
+    try { navigator.vibrate?.(40); } catch (e) {}
+  }
+  beepTimer = setTimeout(tick, wait);
+}
+function beep(freq) {
+  if (!audio) return;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(0.15, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.08);
+  o.connect(g).connect(audio.destination);
+  o.start();
+  o.stop(audio.currentTime + 0.09);
+}
 $("pingAlert").onclick = () => { $("pingAlert").hidden = true; };
 $("btnTrail").onclick = () => {
   trail = [];
