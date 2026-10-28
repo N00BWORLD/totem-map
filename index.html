@@ -416,7 +416,7 @@ async function onDisconnect() {
 function parse(dv) {
   const f = dv.getUint8(1);
   return {
-    myFix: !!(f & 1), seen: !!(f & 2), frFix: !!(f & 4), meet: !!(f & 8), phoneLoc: !!(f & 64),
+    myFix: !!(f & 1), seen: !!(f & 2), frFix: !!(f & 4), meet: !!(f & 8), phoneLoc: !!(f & 64), charging: !!(f & 128),
     lat: dv.getInt32(2, true) / 1e7, lon: dv.getInt32(6, true) / 1e7,
     heading: dv.getUint16(10, true), sats: dv.getUint8(12), bat: dv.getUint8(13),
     flat: dv.getInt32(14, true) / 1e7, flon: dv.getInt32(18, true) / 1e7,
@@ -430,7 +430,7 @@ function parse(dv) {
     screenMin: dv.byteLength >= 42 ? dv.getUint8(41) : null,
     // 펌웨어 4.1부터: 실내 찾기, 위치 오차, 이름
     find: dv.byteLength >= 54 ? {
-      on: !!(dv.getUint8(42) & 1), friendOn: !!(dv.getUint8(42) & 2), scanReady: !!(dv.getUint8(42) & 4),
+      on: !!(dv.getUint8(42) & 1), friendOn: !!(dv.getUint8(42) & 2), scanReady: !!(dv.getUint8(42) & 4), frCharging: !!(dv.getUint8(42) & 8),
       rssiAvg: dv.getInt16(43, true), trend: dv.getInt8(45),
       scanDir: dv.getUint16(46, true), scanSpread: dv.getUint8(48), scanCover: dv.getUint8(49)
     } : null,
@@ -480,8 +480,8 @@ function render(s) {
   if (s.myName) setConn(s.myName);
   renderFind(s);
   $("sats").textContent = s.phoneLoc ? "폰 위치 사용" : s.myFix ? s.sats + "개" : "찾는 중";
-  $("bat").textContent = s.bat + "%";
-  $("fbat").textContent = s.seen ? s.fbat + "%" : "—";
+  $("bat").textContent = s.charging ? "충전 중" : s.bat + "%";
+  $("fbat").textContent = !s.seen ? "—" : s.find && s.find.frCharging ? "충전 중" : s.fbat + "%";
   $("rssi").textContent = s.seen ? s.rssi + "" : "—";
   $("age").textContent = !s.seen ? "없음" : s.age < 60 ? s.age + "초 전" : Math.floor(s.age / 60) + "분 전";
 
