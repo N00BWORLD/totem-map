@@ -510,7 +510,7 @@ function render(s) {
   } else {
     // GPS가 없어도 상대 신호가 오면 신호 세기로 안내 (토템의 "신호로 찾기"와 같은 기준)
     $("dist").textContent = !s.seen ? "상대 없음"
-      : s.age < 20 ? "신호 " + (s.rssi > -80 ? "강함" : s.rssi > -100 ? "보통" : "약함")
+      : s.age < 40 ? "신호 " + (s.rssi > -80 ? "강함" : s.rssi > -100 ? "보통" : "약함")
       : !s.myFix ? "내 GPS 없음" : "상대 GPS 없음";
   }
   if (s.meet) {
