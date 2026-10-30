@@ -243,16 +243,21 @@ button.find-open { background: var(--friend); border-color: var(--friend); color
   <div class="bigdist" id="findDist">—</div>
   <p class="note center" id="findInfo">상대 위치를 기다리는 중…</p>
   <p class="note center warn" id="findCompass" hidden></p>
+  <div class="row">
+    <button class="primary" id="btnNav" disabled>길 안내 (구글 지도)</button>
+  </div>
+  <p class="note center" id="navInfo">상대 위치를 알면 구글 지도로 걸어서 가는 길(좌회전·우회전 음성 안내)을 열어요. 상대가 움직이면 다시 눌러 주세요. 인터넷이 필요해요.</p>
 
   <div class="card">
-    <h3>실내에서 찾기 (신호 세기)</h3>
+    <h3>신호 세기</h3>
     <div class="sig">
       <span class="v" id="sigVal">—</span><span class="note">dBm</span>
       <span class="trend" id="sigTrend"></span>
     </div>
     <div class="gauge"><div id="sigBar"></div></div>
-    <p class="note" id="scanInfo">찾기를 켜면 두 토템이 1초마다 신호를 주고받아요. 토템을 몸 앞에 들고 제자리에서 천천히 한 바퀴 돌면 신호가 센 쪽을 알려 줘요.</p>
-    <div class="row">
+    <!-- 실내 찾기 모드는 펌웨어 4.16에서 뺌 (버튼만 숨김, 예전 펌웨어 호환용 코드는 그대로) -->
+    <p class="note" id="scanInfo" hidden></p>
+    <div class="row" hidden>
       <button class="primary" id="btnFindMode">찾기 켜기</button>
       <button id="btnRescan" disabled>방향 다시 재기</button>
     </div>
@@ -598,6 +603,7 @@ $("btnSave").onclick = async () => {
 
 // ---- 상대 찾기: 폰 GPS + 폰 나침반으로 화살표, 실내에서는 신호 세기 ----
 let findOpen = false, findGeo = null, findPos = null, phoneHeading = null, compassStarted = false;
+let navTarget = null;
 let needleTarget = null, needleSpread = 0, needleRot = 0, findOn = false, lastRssi = null;
 let beepOn = false, audio = null, beepTimer = null;
 
@@ -660,6 +666,8 @@ function renderFind(s) {
   $("findTitle").textContent = name + " 찾기";
   const me = myPosition(s);
   const fr = s.seen && s.frFix && s.age < 120 ? { lat: s.flat, lon: s.flon, acc: s.facc || 10 } : null;
+  navTarget = s.seen && s.frFix ? { lat: s.flat, lon: s.flon } : null;   // 길 안내는 조금 오래된 위치라도 씀
+  $("btnNav").disabled = !navTarget;
   needleTarget = null;
   needleSpread = 0;
   if (me && fr) {
@@ -752,6 +760,15 @@ setInterval(() => { if (findOpen && findOn && linked()) send([6, 1]).catch(() =>
 
 // 금속탐지기처럼 신호가 셀수록 빠르고 높은 삐 소리 + 진동
 $("btnBeep").onclick = () => setBeep(!beepOn);
+
+// 길 안내: 구글 지도(앱이 있으면 앱)로 걸어서 가는 길. 출발지는 구글 지도가 폰 위치로 정함
+$("btnNav").onclick = () => {
+  if (!navTarget) return;
+  const url = "https://www.google.com/maps/dir/?api=1&travelmode=walking&destination=" +
+    navTarget.lat.toFixed(6) + "," + navTarget.lon.toFixed(6);
+  if (NATIVE) location.href = url;   // 안드로이드 앱이 받아서 구글 지도 앱으로 넘김
+  else window.open(url, "_blank");
+};
 function setBeep(on) {
   beepOn = on;
   $("btnBeep").textContent = on ? "삐 소리 끄기" : "삐 소리 켜기";
