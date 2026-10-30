@@ -442,8 +442,48 @@ function parse(dv) {
     acc: dv.byteLength >= 54 ? dv.getUint16(50, true) : 0,
     facc: dv.byteLength >= 54 ? dv.getUint16(52, true) : 0,
     myName: dv.byteLength >= 78 ? readName(dv, 54) : "",
-    frName: dv.byteLength >= 78 ? readName(dv, 66) : ""
+    frName: dv.byteLength >= 78 ? readName(dv, 66) : "",
+    // 펌웨어 4.17부터: 상대 GPS가 안 잡힐 때 상대 주변 와이파이 (최대 2개)
+    wifi: dv.byteLength >= 95 && dv.getUint8(78) ? {
+      age: dv.getUint16(93, true),
+      aps: [0, 1].filter(i => i < dv.getUint8(78)).map(i => ({
+        mac: Array.from(new Uint8Array(dv.buffer, dv.byteOffset + 79 + 6 * i, 6), x => x.toString(16).padStart(2, "0")).join(":"),
+        rssi: dv.getInt8(91 + i)
+      }))
+    } : null
   };
+}
+
+// ---- 와이파이 위치: 상대 GPS가 없을 때 상대 주변 와이파이로 위치를 찾음 ----
+// beaconDB(무료, 공유기 위치 모음)에 물어봄. 이 서비스는 웹페이지에서 직접 부를 수 없어서 안드로이드 앱이 대신 물어봄
+let wifiPos = null, wifiKey = "", wifiBusy = false;
+function wifiLocate(s) {
+  const w = s.wifi;
+  if (!w || w.age > 600 || !NATIVE || !NATIVE.geolocate || wifiBusy) return;
+  const key = w.aps.map(a => a.mac).join(",");
+  if (key === wifiKey) return;   // 같은 공유기면 다시 안 물어봄
+  wifiKey = key;
+  wifiBusy = true;
+  NATIVE.geolocate(JSON.stringify({
+    considerIp: false,
+    wifiAccessPoints: w.aps.map(a => ({ macAddress: a.mac, signalStrength: a.rssi }))
+  }));
+}
+window.onWifiLoc = txt => {
+  wifiBusy = false;
+  let r = null;
+  try { r = JSON.parse(txt); } catch (e) {}
+  if (!txt) wifiKey = "";   // 인터넷 오류: 다음에 다시 물어봄
+  wifiPos = r && r.location ? { lat: r.location.lat, lon: r.location.lng, acc: Math.round(r.accuracy || 100), at: Date.now() } : null;
+};
+// 상대 GPS가 없고 와이파이 위치가 있으면 그걸 상대 위치로 씀 (지도, 화살표, 길 안내 모두)
+function applyWifi(s) {
+  if (!s.seen || s.frFix || !wifiPos || !s.wifi || s.wifi.age > 600 || Date.now() - wifiPos.at > 900000) return;
+  s.frFix = true;
+  s.frWifi = true;
+  s.flat = wifiPos.lat;
+  s.flon = wifiPos.lon;
+  s.facc = wifiPos.acc;
 }
 
 function readName(dv, off) {
@@ -479,6 +519,8 @@ function handlePing(s) {
 function fmtDist(m) { return m < 1000 ? Math.round(m) + "m" : (m / 1000).toFixed(2) + "km"; }
 
 function render(s) {
+  wifiLocate(s);
+  applyWifi(s);
   last = s;
   handlePing(s);
   $("distLabel").textContent = who(s) + "까지";
@@ -511,7 +553,8 @@ function render(s) {
   }
   if (s.myFix && frMarker) {
     link.setLatLngs([meMarker.getLatLng(), frMarker.getLatLng()]);
-    $("dist").textContent = fmtDist(map.distance(meMarker.getLatLng(), frMarker.getLatLng()));
+    $("dist").textContent = fmtDist(map.distance(meMarker.getLatLng(), frMarker.getLatLng())) +
+      (s.frWifi ? ` (와이파이 위치 ±${s.facc}m)` : "");
   } else {
     // GPS가 없어도 상대 신호가 오면 신호 세기로 안내 (토템의 "신호로 찾기"와 같은 기준)
     $("dist").textContent = !s.seen ? "상대 없음"
